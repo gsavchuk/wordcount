@@ -18,7 +18,6 @@ import org.apache.hadoop.mapred.Mapper;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.SkipBadRecords;
 import org.apache.hadoop.mapred.lib.ChainMapper;
 import org.apache.hadoop.mapred.lib.ChainReducer;
 import org.apache.hadoop.util.Tool;
@@ -54,21 +53,6 @@ public class WordCount extends Configured implements Tool {
 		}
 	}
 
-	public static class ThrowsExceptionMapper extends MapReduceBase implements
-			Mapper<Text, IntWritable, Text, IntWritable> {
-
-		public void map(Text key, IntWritable value,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
-				throws IOException {
-			String word = key.toString();
-			if (word.startsWith("a")) {
-				throw new RuntimeException("crashed at word: " + word
-						+ ", counted: " + value.get());
-			}
-			output.collect(key, value);
-		}
-	}
-
 	public static class IntSumReducer extends MapReduceBase implements
 			Reducer<Text, IntWritable, Text, IntWritable> {
 		private IntWritable result = new IntWritable();
@@ -88,7 +72,7 @@ public class WordCount extends Configured implements Tool {
 	}
 
 	public static void main(String[] args) throws Exception {
-        ToolRunner.run(new Configuration(), new WordCount(), args);
+		ToolRunner.run(new Configuration(), new WordCount(), args);
 	}
 
 	@Override
@@ -98,23 +82,16 @@ public class WordCount extends Configured implements Tool {
 			System.exit(2);
 		}
 		JobConf conf = new JobConf(getConf(), WordCount.class);
+		conf.setNumReduceTasks(3);
+		conf.setPartitionerClass(ConstantPartitioner.class);
 		conf.setJobName("wordcount");
 
 		FileInputFormat.addInputPath(conf, new Path(args[0]));
 		FileOutputFormat.setOutputPath(conf, new Path(args[1]));
 
-		SkipBadRecords.setAttemptsToStartSkipping(conf, 1);
-		SkipBadRecords.setMapperMaxSkipRecords(conf, 1);
-		SkipBadRecords.setReducerMaxSkipGroups(conf, 1);
-		conf.setMaxReduceAttempts(100);
-		conf.setMaxMapAttempts(100);
-
 		JobConf countStage = new JobConf(false);
 		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
 				Text.class, Text.class, IntWritable.class, false, countStage);
-
-		ChainMapper.addMapper(conf, ThrowsExceptionMapper.class, Text.class,
-				IntWritable.class, Text.class, IntWritable.class, false, null);
 
 		JobConf reduceStage = new JobConf(false);
 		ChainReducer.setReducer(conf, IntSumReducer.class, Text.class,
