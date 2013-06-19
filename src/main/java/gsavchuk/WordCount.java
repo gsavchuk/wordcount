@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.StringTokenizer;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Text;
@@ -19,8 +21,10 @@ import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapred.SkipBadRecords;
 import org.apache.hadoop.mapred.lib.ChainMapper;
 import org.apache.hadoop.mapred.lib.ChainReducer;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
 
-public class WordCount {
+public class WordCount extends Configured implements Tool {
 	public static class TokenizerMapper extends MapReduceBase implements
 			Mapper<Object, Text, Text, IntWritable> {
 
@@ -83,19 +87,17 @@ public class WordCount {
 		}
 	}
 
-	/**
-	 * 
-	 * 
-	 * @param args
-	 * 
-	 * @throws Exception
-	 */
 	public static void main(String[] args) throws Exception {
+        ToolRunner.run(new Configuration(), new WordCount(), args);
+	}
+
+	@Override
+	public int run(String[] args) throws Exception {
 		if (args.length != 2) {
 			System.err.println("Usage: wordcount <in> <out>");
 			System.exit(2);
 		}
-		JobConf conf = new JobConf(WordCount.class);
+		JobConf conf = new JobConf(getConf(), WordCount.class);
 		conf.setJobName("wordcount");
 
 		FileInputFormat.addInputPath(conf, new Path(args[0]));
@@ -120,5 +122,6 @@ public class WordCount {
 				reduceStage);
 
 		JobClient.runJob(conf);
+		return 0;
 	}
 }
