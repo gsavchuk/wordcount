@@ -99,6 +99,8 @@ public class WordCount extends Configured implements Tool {
 		}
 		JobConf conf = new JobConf(getConf(), WordCount.class);
 		conf.setJobName("wordcount");
+		conf.setKeepFailedTaskFiles(true);
+		conf.setKeepTaskFilesPattern(".*");
 
 		FileInputFormat.addInputPath(conf, new Path(args[0]));
 		FileOutputFormat.setOutputPath(conf, new Path(args[1]));
@@ -107,7 +109,7 @@ public class WordCount extends Configured implements Tool {
 		SkipBadRecords.setMapperMaxSkipRecords(conf, 1);
 		SkipBadRecords.setReducerMaxSkipGroups(conf, 1);
 		conf.setMaxReduceAttempts(100);
-		conf.setMaxMapAttempts(100);
+		conf.setMaxMapAttempts(10);
 
 		JobConf countStage = new JobConf(false);
 		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
