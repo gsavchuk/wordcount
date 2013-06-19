@@ -11,19 +11,22 @@ import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.FileInputFormat;
 import org.apache.hadoop.mapred.FileOutputFormat;
-import org.apache.hadoop.mapred.JobClient;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.MapReduceBase;
 import org.apache.hadoop.mapred.Mapper;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.lib.ChainMapper;
-import org.apache.hadoop.mapred.lib.ChainReducer;
+import org.apache.hadoop.mapred.SequenceFileInputFormat;
+import org.apache.hadoop.mapred.SequenceFileOutputFormat;
+import org.apache.hadoop.mapred.jobcontrol.Job;
+import org.apache.hadoop.mapred.jobcontrol.JobControl;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 public class WordCount extends Configured implements Tool {
+	private static final String TEMP_STORAGE = "/tmp/1";
+
 	public static class TokenizerMapper extends MapReduceBase implements
 			Mapper<Object, Text, Text, IntWritable> {
 
@@ -35,21 +38,9 @@ public class WordCount extends Configured implements Tool {
 				throws IOException {
 			StringTokenizer itr = new StringTokenizer(value.toString());
 			while (itr.hasMoreTokens()) {
-				String afterStrip = retainLettersIn(itr.nextToken());
-				if (!afterStrip.isEmpty()) {
-					word.set(afterStrip);
-					output.collect(word, one);
-				}
+				word.set(itr.nextToken());
+				output.collect(word, one);
 			}
-		}
-
-		String retainLettersIn(String string) {
-			StringBuilder sb = new StringBuilder(string.length());
-			for (char ch : string.toCharArray()) {
-				if (Character.isLetter(ch))
-					sb.append(ch);
-			}
-			return sb.toString();
 		}
 	}
 
@@ -64,7 +55,6 @@ public class WordCount extends Configured implements Tool {
 			while (values.hasNext()) {
 				IntWritable intWritable = values.next();
 				sum += intWritable.get();
-
 			}
 			result.set(sum);
 			output.collect(key, result);
@@ -81,23 +71,34 @@ public class WordCount extends Configured implements Tool {
 			System.err.println("Usage: wordcount <in> <out>");
 			System.exit(2);
 		}
-		JobConf conf = new JobConf(getConf(), WordCount.class);
-		conf.setJobName("wordcount");
+		JobConf tokenizeConf = new JobConf(getConf(), WordCount.class);
+		tokenizeConf.setJobName("tokenize job");
+		tokenizeConf.setOutputKeyClass(Text.class);
+		tokenizeConf.setOutputValueClass(IntWritable.class);
+		tokenizeConf.setMapperClass(TokenizerMapper.class);
+		tokenizeConf.setReducerClass(IntSumReducer.class);
+		tokenizeConf.setOutputFormat(SequenceFileOutputFormat.class);
+		FileInputFormat.addInputPath(tokenizeConf, new Path(args[0]));
+		FileOutputFormat.setOutputPath(tokenizeConf, new Path(TEMP_STORAGE));
 
-		FileInputFormat.addInputPath(conf, new Path(args[0]));
-		FileOutputFormat.setOutputPath(conf, new Path(args[1]));
-		conf.setOutputFormat(FilePerLetterOutputFormat.class);
+		JobConf normalizeConf = new JobConf(getConf(), WordCount.class);
+		normalizeConf.setJobName("normalize job");
+		normalizeConf.setOutputKeyClass(Text.class);
+		normalizeConf.setOutputValueClass(IntWritable.class);
+		normalizeConf.setMapperClass(NormalizerMapper.class);
+		normalizeConf.setReducerClass(IntSumReducer.class);
+		normalizeConf.setInputFormat(SequenceFileInputFormat.class);
+		FileInputFormat.addInputPath(normalizeConf, new Path(TEMP_STORAGE));
+		FileOutputFormat.setOutputPath(normalizeConf, new Path(args[1]));
 
-		JobConf countStage = new JobConf(false);
-		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
-				Text.class, Text.class, IntWritable.class, false, countStage);
+		Job tokenizeJob = new Job(tokenizeConf);
+		Job normalizeJob = new Job(normalizeConf);
+		normalizeJob.addDependingJob(tokenizeJob);
 
-		JobConf reduceStage = new JobConf(false);
-		ChainReducer.setReducer(conf, IntSumReducer.class, Text.class,
-				IntWritable.class, Text.class, IntWritable.class, false,
-				reduceStage);
-
-		JobClient.runJob(conf);
+		JobControl jobControl = new JobControl("word count");
+		jobControl.addJob(tokenizeJob);
+		jobControl.addJob(normalizeJob);
+		jobControl.run();
 		return 0;
 	}
 }
