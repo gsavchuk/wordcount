@@ -16,16 +16,9 @@ import org.apache.hadoop.mapred.Mapper;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.RunningJob;
-import org.apache.hadoop.mapred.lib.ChainMapper;
-import org.apache.hadoop.mapred.lib.ChainReducer;
+import org.apache.hadoop.mapred.SkipBadRecords;
 
 public class WordCount {
-	
-	public enum COUNTER {
-		OMITTED_WORDS;
-	}
-
 	public static class TokenizerMapper extends MapReduceBase implements
 			Mapper<Object, Text, Text, IntWritable> {
 
@@ -37,34 +30,21 @@ public class WordCount {
 				throws IOException {
 			StringTokenizer itr = new StringTokenizer(value.toString());
 			while (itr.hasMoreTokens()) {
-				String afterStrip = retainLettersIn(itr.nextToken());
-				if (!afterStrip.isEmpty()) {
-					word.set(afterStrip);
-					output.collect(word, one);
-				}
+				word.set(itr.nextToken());
+				output.collect(word, one);
 			}
-		}
-
-		String retainLettersIn(String string) {
-			StringBuilder sb = new StringBuilder(string.length());
-			for (char ch : string.toCharArray()) {
-				if (Character.isLetter(ch))
-					sb.append(ch);
-			}
-			return sb.toString();
 		}
 	}
 
-	public static class OmitMapper extends MapReduceBase implements
+	public static class ThrowsExceptionMapper extends MapReduceBase implements
 			Mapper<Text, IntWritable, Text, IntWritable> {
 
 		public void map(Text key, IntWritable value,
 				OutputCollector<Text, IntWritable> output, Reporter reporter)
 				throws IOException {
 			String word = key.toString();
-			if (word.length() < 3 || value.get() < 5) {
-				reporter.getCounter(COUNTER.OMITTED_WORDS).increment(value.get());
-				return;
+			if (word.startsWith("a")) {
+				throw new RuntimeException("crashed at word: " + word);
 			}
 			output.collect(key, value);
 		}
@@ -77,6 +57,10 @@ public class WordCount {
 		public void reduce(Text key, Iterator<IntWritable> values,
 				OutputCollector<Text, IntWritable> output, Reporter reporter)
 				throws IOException {
+			String word = key.toString();
+			if (word.startsWith("a")) {
+				throw new RuntimeException("crashed at word: " + word);
+			}
 			int sum = 0;
 			while (values.hasNext()) {
 				IntWritable intWritable = values.next();
@@ -101,26 +85,32 @@ public class WordCount {
 			System.exit(2);
 		}
 		JobConf conf = new JobConf(WordCount.class);
-		FileInputFormat.addInputPath(conf, new Path(args[0]));
-		FileOutputFormat.setOutputPath(conf, new Path(args[1]));
+		conf.setJobName("wordcount");
+	    
+		conf.setOutputKeyClass(Text.class);
+	    conf.setOutputValueClass(IntWritable.class);
+	    conf.setMapperClass(TokenizerMapper.class);
+	    conf.setReducerClass(IntSumReducer.class);
 
-		JobConf countStage = new JobConf(false);
-		countStage.setJobName("count stage");
-		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
-				Text.class, Text.class, IntWritable.class, false, countStage);
+	    FileInputFormat.addInputPath(conf, new Path(args[0]));
+	    FileOutputFormat.setOutputPath(conf, new Path(args[1]));
+	    
+	    SkipBadRecords.setAttemptsToStartSkipping(conf, 1);
+		SkipBadRecords.setMapperMaxSkipRecords(conf, Long.MAX_VALUE);
+		SkipBadRecords.setReducerMaxSkipGroups(conf, Long.MAX_VALUE);
 
-		JobConf reduceStage = new JobConf(false);
-		ChainReducer.setReducer(conf, IntSumReducer.class, Text.class,
-				IntWritable.class, Text.class, IntWritable.class, false,
-				reduceStage);
+//		JobConf countStage = new JobConf(false);
+//		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
+//				Text.class, Text.class, IntWritable.class, false, countStage);
+//
+//		JobConf reduceStage = new JobConf(false);
+//		ChainReducer.setReducer(conf, IntSumReducer.class, Text.class,
+//				IntWritable.class, Text.class, IntWritable.class, false,
+//				reduceStage);
 
-		JobConf omitStage = new JobConf(false);
-		omitStage.setJobName("omit stage");
-		ChainReducer.addMapper(conf, OmitMapper.class, Text.class,
-				IntWritable.class, Text.class, IntWritable.class, false,
-				omitStage);
-		
-		RunningJob job = JobClient.runJob(conf);
-		System.out.println(job.getCounters().getCounter(COUNTER.OMITTED_WORDS));
+//		ChainReducer.addMapper(conf, ThrowsExceptionMapper.class, Text.class,
+//				IntWritable.class, Text.class, IntWritable.class, false, null);
+
+		JobClient.runJob(conf);
 	}
 }
