@@ -2,71 +2,54 @@ package gsavchuk;
 
 import java.io.IOException;
 import java.util.Iterator;
-import java.util.StringTokenizer;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.FileInputFormat;
 import org.apache.hadoop.mapred.FileOutputFormat;
-import org.apache.hadoop.mapred.JobClient;
 import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.mapred.KeyValueTextInputFormat;
 import org.apache.hadoop.mapred.MapReduceBase;
 import org.apache.hadoop.mapred.Mapper;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.lib.ChainMapper;
-import org.apache.hadoop.mapred.lib.ChainReducer;
+import org.apache.hadoop.mapred.SequenceFileInputFormat;
+import org.apache.hadoop.mapred.SequenceFileOutputFormat;
+import org.apache.hadoop.mapred.jobcontrol.Job;
+import org.apache.hadoop.mapred.jobcontrol.JobControl;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 public class WordCount extends Configured implements Tool {
-	public static class TokenizerMapper extends MapReduceBase implements
-			Mapper<Object, Text, Text, IntWritable> {
+	private static final String TEMP_STORAGE = "/tmp/1";
 
-		private final static IntWritable one = new IntWritable(1);
-		private Text word = new Text();
-
-		public void map(Object key, Text value,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
+	public static class InvertedIndexMapper extends MapReduceBase implements
+			Mapper<Text, Text, Text, Text> {
+		public void map(Text key, Text value,
+				OutputCollector<Text, Text> output, Reporter reporter)
 				throws IOException {
-			StringTokenizer itr = new StringTokenizer(value.toString());
-			while (itr.hasMoreTokens()) {
-				String afterStrip = retainLettersIn(itr.nextToken());
-				if (!afterStrip.isEmpty()) {
-					word.set(afterStrip);
-					output.collect(word, one);
-				}
-			}
-		}
-
-		String retainLettersIn(String string) {
-			StringBuilder sb = new StringBuilder(string.length());
-			for (char ch : string.toCharArray()) {
-				if (Character.isLetter(ch))
-					sb.append(ch);
-			}
-			return sb.toString();
+			output.collect(value, key);
 		}
 	}
 
-	public static class IntSumReducer extends MapReduceBase implements
-			Reducer<Text, IntWritable, Text, IntWritable> {
-		private IntWritable result = new IntWritable();
+	public static class InvertedIndexReducer extends MapReduceBase implements
+			Reducer<Text, Text, Text, Text> {
+		Text result = new Text();
 
-		public void reduce(Text key, Iterator<IntWritable> values,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
+		public void reduce(Text key, Iterator<Text> values,
+				OutputCollector<Text, Text> output, Reporter reporter)
 				throws IOException {
-			int sum = 0;
+			StringBuilder sb = new StringBuilder();
 			while (values.hasNext()) {
-				IntWritable intWritable = values.next();
-				sum += intWritable.get();
-
+				Text t = values.next();
+				if (sb.length() != 0)
+					sb.append(",");
+				sb.append(t.toString());
 			}
-			result.set(sum);
+			result.set(sb.toString());
 			output.collect(key, result);
 		}
 	}
@@ -82,23 +65,41 @@ public class WordCount extends Configured implements Tool {
 			System.exit(2);
 		}
 		JobConf conf = new JobConf(getConf(), WordCount.class);
-		conf.setNumReduceTasks(3);
-		conf.setPartitionerClass(ConstantPartitioner.class);
-		conf.setJobName("wordcount");
-
+		conf.setJobName("inverted index");
 		FileInputFormat.addInputPath(conf, new Path(args[0]));
 		FileOutputFormat.setOutputPath(conf, new Path(args[1]));
 
-		JobConf countStage = new JobConf(false);
-		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
-				Text.class, Text.class, IntWritable.class, false, countStage);
+		JobConf buildIndexConf = new JobConf(getConf(), WordCount.class);
+		buildIndexConf.setJobName("inverted index");
+		buildIndexConf.setInputFormat(KeyValueTextInputFormat.class);
+		buildIndexConf.set("key.value.separator.in.input.line", ",");
+		buildIndexConf.setOutputKeyClass(Text.class);
+		buildIndexConf.setOutputValueClass(Text.class);
+		buildIndexConf.setMapperClass(InvertedIndexMapper.class);
+		buildIndexConf.setReducerClass(InvertedIndexReducer.class);
+		buildIndexConf.setOutputFormat(SequenceFileOutputFormat.class);
+		FileInputFormat.addInputPath(buildIndexConf, new Path(args[0]));
+		FileOutputFormat.setOutputPath(buildIndexConf, new Path(TEMP_STORAGE));
 
-		JobConf reduceStage = new JobConf(false);
-		ChainReducer.setReducer(conf, IntSumReducer.class, Text.class,
-				IntWritable.class, Text.class, IntWritable.class, false,
-				reduceStage);
+		JobConf sortConf = new JobConf(getConf(), WordCount.class);
+		sortConf.setJobName("sort results");
+		sortConf.setOutputKeyClass(Text.class);
+		sortConf.setOutputValueClass(Text.class);
+		sortConf.setMapOutputKeyClass(NumberText.class);
+		sortConf.setMapperClass(SortMapper.class);
+		sortConf.setReducerClass(SortReducer.class);
+		sortConf.setInputFormat(SequenceFileInputFormat.class);
+		FileInputFormat.addInputPath(sortConf, new Path(TEMP_STORAGE));
+		FileOutputFormat.setOutputPath(sortConf, new Path(args[1]));
 
-		JobClient.runJob(conf);
+		Job tokenizeJob = new Job(buildIndexConf);
+		Job normalizeJob = new Job(sortConf);
+		normalizeJob.addDependingJob(tokenizeJob);
+
+		JobControl jobControl = new JobControl("word count");
+		jobControl.addJob(tokenizeJob);
+		jobControl.addJob(normalizeJob);
+		jobControl.run();
 		return 0;
 	}
 }
