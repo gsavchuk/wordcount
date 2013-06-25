@@ -1,19 +1,25 @@
 package gsavchuk;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URI;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
-import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 public class WordCount extends Configured implements Tool {
+	private static final String COMMA = ",";
+	private final static Pattern pattern = Pattern
+			.compile("^(?<custId>\\d+),(?<rating>\\d),.*");
 
 	public static void main(String[] args) throws Exception {
 		ToolRunner.run(new Configuration(), new WordCount(), args);
@@ -45,16 +51,36 @@ public class WordCount extends Configured implements Tool {
 			FileStatus[] listStatus = localFs.listStatus(fromLocalPath,
 					new FilesOnlyPathFilter(localFs));
 			for (FileStatus fileStatus : listStatus) {
-				FSDataInputStream in = localFs.open(fileStatus.getPath());
-				try {
-					IOUtils.copyBytes(in, out, getConf(), false);
-				} finally {
-					in.close();
-				}
+				parseFile(localFs, out, fileStatus);
 			}
 			return 0;
 		} finally {
 			out.close();
+		}
+	}
+
+	private void parseFile(FileSystem fs, FSDataOutputStream out,
+			FileStatus fileStatus) throws IOException {
+		BufferedReader in = new BufferedReader(new InputStreamReader(
+				fs.open(fileStatus.getPath())));
+		try {
+			String movieId = null;
+			String line;
+			while ((line = in.readLine()) != null) {
+				if (null == movieId) {
+					movieId = line.substring(0, line.indexOf(":"));
+					continue;
+				}
+				Matcher matcher = pattern.matcher(line);
+				if (matcher.matches()) {
+					String toWrite = movieId + COMMA + matcher.group("custId")
+							+ COMMA + matcher.group("rating")
+							+ System.lineSeparator();
+					out.write(toWrite.getBytes());
+				}
+			}
+		} finally {
+			in.close();
 		}
 	}
 }
