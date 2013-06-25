@@ -26,7 +26,6 @@ import org.apache.hadoop.mapred.Mapper;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.RunningJob;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
@@ -37,7 +36,7 @@ public class WordCount extends Configured implements Tool {
 	public static class InvertedIndexMapper extends MapReduceBase implements
 			Mapper<Text, Text, Text, Text> {
 		private final static Pattern pattern = Pattern
-				.compile("^(?<patent>\\d+),\\d*,\\d*,\\d*,(?<country>.+?),.*");
+				.compile("^(?<patent>\\d+),(?<year>\\d+),\\d*,\\d*,(?<country>.+?),.*");
 		private final Map<String, String> patentToCountry = new HashMap<String, String>();
 		private final Text k = new Text();
 		private final Text v = new Text();
@@ -45,14 +44,13 @@ public class WordCount extends Configured implements Tool {
 		public void map(Text key, Text value,
 				OutputCollector<Text, Text> output, Reporter reporter)
 				throws IOException {
-			String citing = patentToCountry.get(key.toString());
-			String cited = patentToCountry.get(value.toString());
-			if (cited == null || citing == null) {
-				reporter.incrCounter(Errors.WRONG_MAPPINGS, 1);
+			String cited = value.toString();
+			String citedCountry = patentToCountry.get(cited);
+			if (citedCountry == null) {
 				return;
 			}
-			k.set(cited);
-			v.set(citing);
+			k.set(citedCountry);
+			v.set(cited);
 			output.collect(k, v);
 		}
 
@@ -79,9 +77,13 @@ public class WordCount extends Configured implements Tool {
 				String line;
 				while ((line = in.readLine()) != null) {
 					Matcher matcher = pattern.matcher(line);
-					if (matcher.matches())
+					if (!matcher.matches())
+						continue;
+					int year = Integer.parseInt(matcher.group("year"));
+					if (year >= 1980) {
 						patentToCountry.put(matcher.group("patent"),
 								matcher.group("country"));
+					}
 				}
 			} finally {
 				in.close();
@@ -99,12 +101,9 @@ public class WordCount extends Configured implements Tool {
 			StringBuilder sb = new StringBuilder();
 			while (values.hasNext()) {
 				Text t = values.next();
-				String str = t.toString();
-				if (sb.indexOf(str) == -1) {
-					if (sb.length() != 0)
-						sb.append(",");
-					sb.append(str);
-				}
+				if (sb.length() != 0)
+					sb.append(",");
+				sb.append(t.toString());
 			}
 			result.set(sb.toString());
 			output.collect(key, result);
@@ -131,10 +130,8 @@ public class WordCount extends Configured implements Tool {
 		conf.setReducerClass(InvertedIndexReducer.class);
 		FileInputFormat.addInputPath(conf, new Path(args[0]));
 		FileOutputFormat.setOutputPath(conf, new Path(args[1]));
-		DistributedCache.addCacheFile(new URI(CACHED_FILE), conf);
-		RunningJob job = JobClient.runJob(conf);
-		System.out.println("failed mappings: "
-				+ job.getCounters().getCounter(Errors.WRONG_MAPPINGS));
+		DistributedCache.addCacheFile(new Path(CACHED_FILE).toUri(), conf);
+		JobClient.runJob(conf);
 		return 0;
 	}
 }
