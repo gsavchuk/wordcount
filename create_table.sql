@@ -1,0 +1,1 @@
+CREATE TABLE export(word VARCHAR(255) PRIMARY KEY, count INT);

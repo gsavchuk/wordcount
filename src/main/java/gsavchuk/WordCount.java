@@ -8,9 +8,9 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.FileInputFormat;
-import org.apache.hadoop.mapred.FileOutputFormat;
 import org.apache.hadoop.mapred.JobClient;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.MapReduceBase;
@@ -18,9 +18,10 @@ import org.apache.hadoop.mapred.Mapper;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.SkipBadRecords;
 import org.apache.hadoop.mapred.lib.ChainMapper;
 import org.apache.hadoop.mapred.lib.ChainReducer;
+import org.apache.hadoop.mapred.lib.db.DBConfiguration;
+import org.apache.hadoop.mapred.lib.db.DBOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
@@ -54,72 +55,49 @@ public class WordCount extends Configured implements Tool {
 		}
 	}
 
-	public static class ThrowsExceptionMapper extends MapReduceBase implements
-			Mapper<Text, IntWritable, Text, IntWritable> {
-
-		public void map(Text key, IntWritable value,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
-				throws IOException {
-			String word = key.toString();
-			if (word.startsWith("a")) {
-				throw new RuntimeException("crashed at word: " + word
-						+ ", counted: " + value.get());
-			}
-			output.collect(key, value);
-		}
-	}
-
 	public static class IntSumReducer extends MapReduceBase implements
-			Reducer<Text, IntWritable, Text, IntWritable> {
-		private IntWritable result = new IntWritable();
+			Reducer<Text, IntWritable, WordCountWritable, NullWritable> {
+		private WordCountWritable result = new WordCountWritable();
 
 		public void reduce(Text key, Iterator<IntWritable> values,
-				OutputCollector<Text, IntWritable> output, Reporter reporter)
-				throws IOException {
+				OutputCollector<WordCountWritable, NullWritable> output,
+				Reporter reporter) throws IOException {
 			int sum = 0;
 			while (values.hasNext()) {
 				IntWritable intWritable = values.next();
 				sum += intWritable.get();
-
 			}
-			result.set(sum);
-			output.collect(key, result);
+			result.setWord(key.toString());
+			result.setCount(sum);
+			output.collect(result, null);
 		}
 	}
 
 	public static void main(String[] args) throws Exception {
-        ToolRunner.run(new Configuration(), new WordCount(), args);
+		ToolRunner.run(new Configuration(), new WordCount(), args);
 	}
 
 	@Override
 	public int run(String[] args) throws Exception {
-		if (args.length != 2) {
-			System.err.println("Usage: wordcount <in> <out>");
+		if (args.length != 1) {
+			System.err.println("Usage: wordcount <in>");
 			System.exit(2);
 		}
 		JobConf conf = new JobConf(getConf(), WordCount.class);
 		conf.setJobName("wordcount");
 
 		FileInputFormat.addInputPath(conf, new Path(args[0]));
-		FileOutputFormat.setOutputPath(conf, new Path(args[1]));
+		conf.setOutputFormat(DBOutputFormat.class);
+		DBConfiguration.configureDB(conf, "org.h2.Driver",
+				"jdbc:h2:target/export", "sa", "sa");
+		DBOutputFormat.setOutput(conf, "export", "word", "count");
 
-		SkipBadRecords.setAttemptsToStartSkipping(conf, 1);
-		SkipBadRecords.setMapperMaxSkipRecords(conf, 1);
-		SkipBadRecords.setReducerMaxSkipGroups(conf, 1);
-		conf.setMaxReduceAttempts(100);
-		conf.setMaxMapAttempts(100);
-
-		JobConf countStage = new JobConf(false);
 		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
-				Text.class, Text.class, IntWritable.class, false, countStage);
+				Text.class, Text.class, IntWritable.class, false, null);
 
-		ChainMapper.addMapper(conf, ThrowsExceptionMapper.class, Text.class,
-				IntWritable.class, Text.class, IntWritable.class, false, null);
-
-		JobConf reduceStage = new JobConf(false);
 		ChainReducer.setReducer(conf, IntSumReducer.class, Text.class,
-				IntWritable.class, Text.class, IntWritable.class, false,
-				reduceStage);
+				IntWritable.class, WordCountWritable.class, NullWritable.class,
+				false, null);
 
 		JobClient.runJob(conf);
 		return 0;
