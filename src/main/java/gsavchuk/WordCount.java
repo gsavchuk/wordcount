@@ -89,7 +89,7 @@ public class WordCount extends Configured implements Tool {
 		FileInputFormat.addInputPath(conf, new Path(args[0]));
 		conf.setOutputFormat(DBOutputFormat.class);
 		DBConfiguration.configureDB(conf, "org.h2.Driver",
-				"jdbc:h2:target/export", "sa", "sa");
+				"jdbc:h2:~/projects/java/wordcount/target/export", "sa", "sa");
 		DBOutputFormat.setOutput(conf, "export", "word", "count");
 
 		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
