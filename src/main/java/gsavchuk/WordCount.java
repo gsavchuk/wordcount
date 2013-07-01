@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.StringTokenizer;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Text;
@@ -16,16 +18,13 @@ import org.apache.hadoop.mapred.Mapper;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.Reducer;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.RunningJob;
+import org.apache.hadoop.mapred.SkipBadRecords;
 import org.apache.hadoop.mapred.lib.ChainMapper;
 import org.apache.hadoop.mapred.lib.ChainReducer;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
 
-public class WordCount {
-	
-	public enum COUNTER {
-		OMITTED_WORDS;
-	}
-
+public class WordCount extends Configured implements Tool {
 	public static class TokenizerMapper extends MapReduceBase implements
 			Mapper<Object, Text, Text, IntWritable> {
 
@@ -55,16 +54,16 @@ public class WordCount {
 		}
 	}
 
-	public static class OmitMapper extends MapReduceBase implements
+	public static class ThrowsExceptionMapper extends MapReduceBase implements
 			Mapper<Text, IntWritable, Text, IntWritable> {
 
 		public void map(Text key, IntWritable value,
 				OutputCollector<Text, IntWritable> output, Reporter reporter)
 				throws IOException {
 			String word = key.toString();
-			if (word.length() < 3 || value.get() < 5) {
-				reporter.getCounter(COUNTER.OMITTED_WORDS).increment(value.get());
-				return;
+			if (word.startsWith("a")) {
+				throw new RuntimeException("crashed at word: " + word
+						+ ", counted: " + value.get());
 			}
 			output.collect(key, value);
 		}
@@ -88,39 +87,41 @@ public class WordCount {
 		}
 	}
 
-	/**
-	 * 
-	 * 
-	 * @param args
-	 * 
-	 * @throws Exception
-	 */
 	public static void main(String[] args) throws Exception {
+        ToolRunner.run(new Configuration(), new WordCount(), args);
+	}
+
+	@Override
+	public int run(String[] args) throws Exception {
 		if (args.length != 2) {
 			System.err.println("Usage: wordcount <in> <out>");
 			System.exit(2);
 		}
-		JobConf conf = new JobConf(WordCount.class);
+		JobConf conf = new JobConf(getConf(), WordCount.class);
+		conf.setJobName("wordcount");
+
 		FileInputFormat.addInputPath(conf, new Path(args[0]));
 		FileOutputFormat.setOutputPath(conf, new Path(args[1]));
 
+		SkipBadRecords.setAttemptsToStartSkipping(conf, 1);
+		SkipBadRecords.setMapperMaxSkipRecords(conf, 1);
+		SkipBadRecords.setReducerMaxSkipGroups(conf, 1);
+		conf.setMaxReduceAttempts(100);
+		conf.setMaxMapAttempts(100);
+
 		JobConf countStage = new JobConf(false);
-		countStage.setJobName("count stage");
 		ChainMapper.addMapper(conf, TokenizerMapper.class, Object.class,
 				Text.class, Text.class, IntWritable.class, false, countStage);
+
+		ChainMapper.addMapper(conf, ThrowsExceptionMapper.class, Text.class,
+				IntWritable.class, Text.class, IntWritable.class, false, null);
 
 		JobConf reduceStage = new JobConf(false);
 		ChainReducer.setReducer(conf, IntSumReducer.class, Text.class,
 				IntWritable.class, Text.class, IntWritable.class, false,
 				reduceStage);
 
-		JobConf omitStage = new JobConf(false);
-		omitStage.setJobName("omit stage");
-		ChainReducer.addMapper(conf, OmitMapper.class, Text.class,
-				IntWritable.class, Text.class, IntWritable.class, false,
-				omitStage);
-		
-		RunningJob job = JobClient.runJob(conf);
-		System.out.println(job.getCounters().getCounter(COUNTER.OMITTED_WORDS));
+		JobClient.runJob(conf);
+		return 0;
 	}
 }
